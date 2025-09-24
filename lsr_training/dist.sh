@@ -4,6 +4,9 @@ SCRIPT=$1
 shift
 ARGS=("$@")
 
+source /home/m11215122/miniconda3/etc/profile.d/conda.sh
+conda activate lsrna
+
 for ((i=0; i<${#ARGS[@]}; i++)); do
     if [[ ${ARGS[i]} == "--gpu" ]]; then
         GPU=${ARGS[i+1]}

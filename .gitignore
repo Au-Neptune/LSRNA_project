@@ -1,0 +1,22 @@
+# Python 快取檔案
+__pycache__/
+*.pyc
+
+# 訓練結果的模型權重檔
+*.pth
+*.pt
+
+# 其他常見的 Python 忽略項目 (建議加入)
+# 虛擬環境
+venv/
+env/
+.env
+
+# IDE 或編輯器設定檔
+.vscode/
+.idea/
+
+# 作業系統產生的檔案
+.DS_Store
+
+log.txt

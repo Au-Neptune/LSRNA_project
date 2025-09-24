@@ -28,7 +28,7 @@ parser.add_argument('--part', type=str, default='1/1')
 args = parser.parse_args()
 
 down_scales = [2,3,4] # fixed
-base_dir = '/workspace/datasets/train/OpenImages' # fixed
+base_dir = '/home/m11215122/datasets/OpenImages/' # fixed
 count = 0
 
 annotation_path = f'{base_dir}/image_ids_and_rotation.csv' # metadata of OpenImages 
