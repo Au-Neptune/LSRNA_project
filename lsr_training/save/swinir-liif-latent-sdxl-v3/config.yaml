@@ -15,8 +15,8 @@ train_dataset:
       augment: []
       sample_size: 64
   num_workers: 4
-  batch_size: 64
-valid_path: /home/m11215122/datasets/OpenImages/HR
+  batch_size: 32
+valid_path: /home/m11215122/datasets/OpenImages/valid
 sd_ckpt: stabilityai/stable-diffusion-xl-base-1.0
 model:
   name: liif
@@ -66,7 +66,7 @@ lr_scheduler:
     eta_min: 1.0e-07
 iter_max: 1000000
 iter_print: 2000
-iter_val: 1000001
+iter_val: 50000
 iter_save: 200000
 seed: null
 save_path: save/swinir-liif-latent-sdxl-v3

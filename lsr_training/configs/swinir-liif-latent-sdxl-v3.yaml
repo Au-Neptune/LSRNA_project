@@ -15,7 +15,7 @@ train_dataset:
   num_workers: 4 # total
   batch_size: 32 # total
 
-valid_path: /home/m11215122/datasets/OpenImages/HR
+valid_path: /home/m11215122/datasets/OpenImages/valid
 sd_ckpt: stabilityai/stable-diffusion-xl-base-1.0 # fixed
 
 model:
@@ -54,5 +54,5 @@ lr_scheduler:
 
 iter_max: 1000000
 iter_print: 2000
-iter_val: 1000001
+iter_val: 50000
 iter_save: 200000

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage | ./dist.sh train.py --config configs/swinir-liif-latent-sdxl-v3.yaml --gpu 0,1
+# Usage | sudo bash dist.sh train.py --config configs/swinir-liif-latent-sdxl-v3.yaml --gpu 0
 SCRIPT=$1
 shift
 ARGS=("$@")

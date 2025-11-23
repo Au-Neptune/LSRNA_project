@@ -58,7 +58,7 @@ def prepare_training(config, log):
     return model, optimizer, lr_scheduler, iter_start, vae
 
 
-def make_train_loader(config):
+def make_train_loader(config, log):
     spec = config['train_dataset']
     seed = 0 if not config['seed'] else config['seed']
     dataset = datasets.make(spec['dataset'])
@@ -72,6 +72,9 @@ def make_train_loader(config):
     sampler = DistributedSampler(dataset, shuffle=True, seed=seed)
     data_loader = DataLoader(dataset, batch_size=batch_size, drop_last=True, 
         shuffle=False, pin_memory=True, num_workers=num_workers, sampler=sampler)
+    
+    log('train dataset: {} images, batch_size: {}, len: {}'.format(
+        len(dataset), spec['batch_size'], len(data_loader)))
     return data_loader, sampler
 
 
@@ -154,7 +157,7 @@ def main():
     # prepare training
     model, optimizer, lr_scheduler, iter_start, vae = prepare_training(config, log)
     model = nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
-    train_loader, train_sampler = make_train_loader(config)
+    train_loader, train_sampler = make_train_loader(config, log)
 
     if rank == 0:
         assert os.path.exists(config['valid_path'])
