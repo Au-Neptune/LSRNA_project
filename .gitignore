@@ -4,6 +4,7 @@ __pycache__/
 
 # 訓練結果的相關資源
 valid/
+generated_images/
 *.pth
 *.pt
 
