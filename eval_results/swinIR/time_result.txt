@@ -1,0 +1,6 @@
+Total images: 450
+Generated: 450
+Failed: 0
+Average Time: 51.4068 sec
+Min Time: 50.9596 sec
+Max Time: 51.5093 sec

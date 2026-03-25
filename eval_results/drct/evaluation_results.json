@@ -1,0 +1,18 @@
+{
+  "metrics": {
+    "FID": 108.97365620865355,
+    "KID": 0.003013400127855983,
+    "pFID": 52.95978757494578,
+    "pKID": 0.022554408868868895
+  },
+  "settings": {
+    "height": 2048,
+    "width": 2048,
+    "input_size": 1024,
+    "patch_size": 512,
+    "total_patches": 50000,
+    "cleanfid_mode": "clean",
+    "seed": 42
+  },
+  "avg_inference_time": 51.41623310936822
+}

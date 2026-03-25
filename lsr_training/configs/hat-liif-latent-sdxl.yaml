@@ -15,7 +15,7 @@ train_dataset:
   num_workers: 4 # total
   batch_size: 32 # total
 
-valid_path: /home/m11215122/datasets/OpenImages/valid/HR
+valid_path: /home/m11215122/datasets/OpenImages/valid/HR_resized
 sd_ckpt: stabilityai/stable-diffusion-xl-base-1.0 # fixed
 
 model:
@@ -24,7 +24,7 @@ model:
     feat_unfold: true
     local_ensemble: true
     encoder_spec:
-      name: swinir
+      name: hat
       args:
         img_size: 32 # inp_size
         in_chans: 4
@@ -32,7 +32,12 @@ model:
         depths: [6,6,6,6]
         num_heads: [6,6,6,6]
         window_size: 8
+        mlp_ratio: 2.
         upsampler: none
+        resi_connection: 1conv
+        compress_ratio: 3
+        squeeze_factor: 30
+        overlap_ratio: 0.5
     imnet_spec:
       name: mlp
       args:

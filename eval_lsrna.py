@@ -17,12 +17,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ==================== 全域常數設定 ====================
 # 輸出設定
-OUTPUT_PATH = "eval_results/demofusioin"
+OUTPUT_PATH = "eval_results/dat"
 
 # 模型設定
 VAE_MODEL = "madebyollin/sdxl-vae-fp16-fix"
 MODEL_CKPT = "stabilityai/stable-diffusion-xl-base-1.0"
-# LSR_PATH = "lsr/swinir-liif-latent-sdxl.pth"
+LSR_PATH = "lsr_training/save/dat-liif-latent-sdxl/iter_last.pth"
 DEVICE = "cuda"
 DTYPE = torch.float16
 
@@ -210,7 +210,7 @@ def load_pipeline():
     vae = AutoencoderKL.from_pretrained(VAE_MODEL, torch_dtype=DTYPE)
     scheduler = DDIMScheduler.from_pretrained(MODEL_CKPT, subfolder="scheduler")
     
-    pipe = DemoFusionSDXLPipeline.from_pretrained(
+    pipe = DemoFusionLSRNASDXLPipeline.from_pretrained(
         MODEL_CKPT, 
         scheduler=scheduler, 
         vae=vae, 
@@ -247,15 +247,15 @@ def generate_single_image(pipe, prompt, image_lr):
                 height=HEIGHT,
                 width=WIDTH,
                 view_batch_size=VIEW_BATCH_SIZE,
-                # stride_ratio=STRIDE_RATIO,
-                # lsr_path=LSR_PATH,
-                # inversion_depth=INVERSION_DEPTH,
-                # rna_min_std=RNA_MIN_STD,
-                # rna_max_std=RNA_MAX_STD,
-                # cosine_scale_1=COSINE_SCALE_1,
-                # cosine_scale_2=COSINE_SCALE_2,
-                # cosine_scale_3=COSINE_SCALE_3,
-                # sigma=SIGMA,
+                stride_ratio=STRIDE_RATIO,
+                lsr_path=LSR_PATH,
+                inversion_depth=INVERSION_DEPTH,
+                rna_min_std=RNA_MIN_STD,
+                rna_max_std=RNA_MAX_STD,
+                cosine_scale_1=COSINE_SCALE_1,
+                cosine_scale_2=COSINE_SCALE_2,
+                cosine_scale_3=COSINE_SCALE_3,
+                sigma=SIGMA,
                 image_lr=image_lr
             )[1]  # 取第二張圖
         return image

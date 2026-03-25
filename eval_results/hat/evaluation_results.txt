@@ -1,0 +1,13 @@
+============================================================
+EVALUATION RESULTS
+============================================================
+
+Average Inference Time: 51.4093 sec/image
+
+Full Image Metrics:
+  FID  : 108.8499
+  KID  : 0.003183
+
+Patch-based Metrics:
+  pFID : 50.7517
+  pKID : 0.021328
