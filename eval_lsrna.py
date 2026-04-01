@@ -21,12 +21,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ==================== 全域常數設定 ====================
 # 輸出設定
-OUTPUT_PATH = "eval_results/drct"
+OUTPUT_PATH = "eval_results/swinIR"
 
 # 模型設定
 VAE_MODEL = "madebyollin/sdxl-vae-fp16-fix"
 MODEL_CKPT = "stabilityai/stable-diffusion-xl-base-1.0"
-LSR_PATH = "lsr_training/save/drct-liif-latent-sdxl/iter_last.pth"
+LSR_PATH = "lsr_training/save/swinir-liif-latent-sdxl/iter_last.pth"
 DEVICE = "cuda"
 DTYPE = torch.float16
 
@@ -54,10 +54,10 @@ SIGMA = 0.8
 
 # Patch 設定
 PATCH_SIZE = 512
-TOTAL_PATCHES = 50000
+TOTAL_PATCHES = 25000
 
 # 控制開關
-SKIP_GEN = False  # 設為 True 跳過生成步驟
+SKIP_GEN = True  # 設為 True 跳過生成步驟
 TEXT_TO_IMAGE = True  # 設為 True 使用 text-to-image 模式
 
 # clean-fid 設定
@@ -68,7 +68,7 @@ CLEANFID_BATCH_SIZE = 32
 
 # 額外評估指標設定
 CLIP_MODEL_NAME = "openai/clip-vit-large-patch14"
-LPIPS_NET = "alex"
+LPIPS_NET = "vgg"
 LPIPS_IMAGE_SIZE = 256
 METRIC_BATCH_SIZE = 16
 PR_K = 3
@@ -82,35 +82,6 @@ def set_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
-
-def load_and_process_image(pil_image, target_size=INPUT_SIZE):
-    """
-    改進的圖像預處理: 使用填充方式保持長寬比
-    避免裁切導致的資訊損失
-    """
-    # 計算縮放比例 (保持長寬比)
-    w, h = pil_image.size
-    scale = target_size / max(w, h)
-    new_w, new_h = int(w * scale), int(h * scale)
-    
-    # 縮放圖片
-    img = pil_image.resize((new_w, new_h), Image.BICUBIC)
-    
-    # 建立黑色背景並居中貼上
-    padded = Image.new('RGB', (target_size, target_size), (0, 0, 0))
-    paste_x = (target_size - new_w) // 2
-    paste_y = (target_size - new_h) // 2
-    padded.paste(img, (paste_x, paste_y))
-    
-    # 轉換為 tensor
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-    ])
-    
-    image_tensor = transform(padded).unsqueeze(0).half()
-    return image_tensor
 
 
 def crop_single_image(args):
@@ -267,16 +238,16 @@ def generate_single_image(pipe, prompt, image_lr):
                 height=HEIGHT,
                 width=WIDTH,
                 view_batch_size=VIEW_BATCH_SIZE,
-                stride_ratio=STRIDE_RATIO,
-                lsr_path=LSR_PATH,
-                inversion_depth=INVERSION_DEPTH,
-                rna_min_std=RNA_MIN_STD,
-                rna_max_std=RNA_MAX_STD,
-                cosine_scale_1=COSINE_SCALE_1,
-                cosine_scale_2=COSINE_SCALE_2,
-                cosine_scale_3=COSINE_SCALE_3,
-                sigma=SIGMA,
-                image_lr=image_lr
+                # stride_ratio=STRIDE_RATIO,
+                # lsr_path=LSR_PATH,
+                # inversion_depth=INVERSION_DEPTH,
+                # rna_min_std=RNA_MIN_STD,
+                # rna_max_std=RNA_MAX_STD,
+                # cosine_scale_1=COSINE_SCALE_1,
+                # cosine_scale_2=COSINE_SCALE_2,
+                # cosine_scale_3=COSINE_SCALE_3,
+                # sigma=SIGMA,
+                # image_lr=image_lr
             )[1]  # 取第二張圖
         return image
         
@@ -348,20 +319,7 @@ def generate_images(pipe, captions_data, gen_dir):
                 current_prompt = "high resolution photography"
 
             print(f"   Prompt: {current_prompt[:80]}...")
-
-            # 讀取並處理輸入圖像
-            if not TEXT_TO_IMAGE:
-                print("   使用 Image-to-Image 模式")
-                try:
-                    input_image = Image.open(os.path.join(HR_PATH, filename)).convert("RGB")
-                    image_lr = load_and_process_image(input_image).to(DEVICE)
-                except Exception as e:
-                    print(f"❌ 圖片載入失敗: {e}")
-                    failed_count += 1
-                    continue
-            else:
-                print("   使用 Text-to-Image 模式")
-                image_lr = None
+            print("   使用 Text-to-Image 模式")
 
             # 計時開始
             if has_cuda:
@@ -370,7 +328,7 @@ def generate_images(pipe, captions_data, gen_dir):
             start_time = time.time()
 
             # 生成圖像
-            image = generate_single_image(pipe, current_prompt, image_lr)
+            image = generate_single_image(pipe, current_prompt, image_lr = None)
 
             if image is None:
                 print(f"❌ 生成失敗，跳過")
@@ -483,16 +441,28 @@ def list_image_files(directory):
     ])
 
 
-def _to_lpips_tensor(pil_img):
-    transform = transforms.Compose([
-        transforms.Resize((LPIPS_IMAGE_SIZE, LPIPS_IMAGE_SIZE)),
+def _to_lpips_tensor(pil_img, need_resize):
+    transform_list = []
+
+    if need_resize:
+        transform_list.append(
+            transforms.Resize(
+                (LPIPS_IMAGE_SIZE, LPIPS_IMAGE_SIZE),
+                interpolation=transforms.InterpolationMode.BICUBIC,
+                antialias=True
+            )
+        )
+
+    transform_list.extend([
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
     ])
+
+    transform = transforms.Compose(transform_list)
     return transform(pil_img)
 
 
-def compute_lpips(gen_dir, real_dir):
+def compute_lpips(gen_dir, real_dir, need_resize):
     """計算 paired LPIPS (依檔名配對)"""
 
     gen_files = set(list_image_files(gen_dir))
@@ -516,8 +486,8 @@ def compute_lpips(gen_dir, real_dir):
             for fname in batch_files:
                 gen_img = Image.open(os.path.join(gen_dir, fname)).convert('RGB')
                 real_img = Image.open(os.path.join(real_dir, fname)).convert('RGB')
-                gen_batch.append(_to_lpips_tensor(gen_img))
-                real_batch.append(_to_lpips_tensor(real_img))
+                gen_batch.append(_to_lpips_tensor(gen_img, need_resize))
+                real_batch.append(_to_lpips_tensor(real_img, need_resize))
 
             gen_tensor = torch.stack(gen_batch, dim=0).to(metric_device)
             real_tensor = torch.stack(real_batch, dim=0).to(metric_device)
@@ -556,84 +526,6 @@ def compute_clipscore(gen_dir, captions_data):
             sims.extend(batch_sims.detach().cpu().tolist())
 
     return float(np.mean(sims)) if sims else float('nan')
-
-
-def _load_inception_feature_extractor(metric_device):
-    weights = models.Inception_V3_Weights.DEFAULT
-    model = models.inception_v3(weights=weights, transform_input=False)
-    model.fc = torch.nn.Identity()
-    model.eval().to(metric_device)
-
-    preprocess = transforms.Compose([
-        transforms.Resize((299, 299)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    return model, preprocess
-
-
-def _extract_features(image_dir, files, model, preprocess, metric_device):
-    feats = []
-    with torch.no_grad():
-        for i in tqdm(range(0, len(files), METRIC_BATCH_SIZE), desc=f"Features-{os.path.basename(image_dir)}"):
-            batch_files = files[i:i + METRIC_BATCH_SIZE]
-            batch = []
-            for fname in batch_files:
-                img = Image.open(os.path.join(image_dir, fname)).convert('RGB')
-                batch.append(preprocess(img))
-            x = torch.stack(batch, dim=0).to(metric_device)
-            f = model(x)
-            if isinstance(f, tuple):
-                f = f[0]
-            feats.append(f.detach().cpu().numpy())
-
-    if not feats:
-        return np.empty((0, 2048), dtype=np.float32)
-    return np.concatenate(feats, axis=0).astype(np.float32)
-
-
-def _kth_radius(features, k):
-    if features.shape[0] <= 1:
-        return np.zeros((features.shape[0],), dtype=np.float32)
-    d = cdist(features, features, metric='euclidean')
-    k_eff = min(k + 1, d.shape[1] - 1)
-    sorted_d = np.sort(d, axis=1)
-    return sorted_d[:, k_eff].astype(np.float32)
-
-
-def compute_pr_recall(gen_dir, real_dir, k=PR_K, max_samples=PR_MAX_SAMPLES):
-    """計算 Precision / Recall for Generative Models"""
-    gen_files = list_image_files(gen_dir)
-    real_files = list_image_files(real_dir)
-
-    if not gen_files or not real_files:
-        return float('nan'), float('nan')
-
-    if len(gen_files) > max_samples:
-        gen_files = random.sample(gen_files, max_samples)
-    if len(real_files) > max_samples:
-        real_files = random.sample(real_files, max_samples)
-
-    metric_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model, preprocess = _load_inception_feature_extractor(metric_device)
-
-    gen_feat = _extract_features(gen_dir, gen_files, model, preprocess, metric_device)
-    real_feat = _extract_features(real_dir, real_files, model, preprocess, metric_device)
-
-    if gen_feat.shape[0] == 0 or real_feat.shape[0] == 0:
-        return float('nan'), float('nan')
-
-    real_radius = _kth_radius(real_feat, k)
-    gen_radius = _kth_radius(gen_feat, k)
-    d_gr = cdist(gen_feat, real_feat, metric='euclidean')
-
-    precision_hits = (d_gr <= real_radius[None, :]).any(axis=1)
-    recall_hits = (d_gr <= gen_radius[:, None]).any(axis=0)
-
-    precision = float(np.mean(precision_hits))
-    recall = float(np.mean(recall_hits))
-    return precision, recall
-
 
 def calculate_metrics_with_cleanfid(gen_dir, real_dir, captions_data):
     """
@@ -805,7 +697,7 @@ def calculate_metrics_with_cleanfid(gen_dir, real_dir, captions_data):
     print("-"*60)
     try:
         if os.path.exists(gen_patch_dir) and os.path.exists(real_patch_dir):
-            plpips_score = compute_lpips(gen_patch_dir, real_patch_dir)
+            plpips_score = compute_lpips(gen_patch_dir, real_patch_dir, need_resize=False)
             metrics['pLPIPS'] = plpips_score
             print(f"✅ pLPIPS: {plpips_score:.6f}")
         else:
@@ -843,29 +735,12 @@ def calculate_metrics_with_cleanfid(gen_dir, real_dir, captions_data):
     print("📐 計算 LPIPS")
     print("-"*60)
     try:
-        lpips_score = compute_lpips(gen_dir, real_dir)
+        lpips_score = compute_lpips(gen_dir, real_dir, need_resize=True)
         metrics['LPIPS'] = lpips_score
         print(f"✅ LPIPS: {lpips_score:.6f}")
     except Exception as e:
         print(f"❌ LPIPS 計算失敗: {e}")
         metrics['LPIPS'] = float('nan')
-
-    # ========================================
-    # 8. 計算 PR-Recall/Precision
-    # ========================================
-    print("\n" + "-"*60)
-    print("📐 計算 PR-Precision / PR-Recall")
-    print("-"*60)
-    try:
-        pr_precision, pr_recall = compute_pr_recall(gen_dir, real_dir)
-        metrics['PR_Precision'] = pr_precision
-        metrics['PR_Recall'] = pr_recall
-        print(f"✅ PR-Precision: {pr_precision:.6f}")
-        print(f"✅ PR-Recall   : {pr_recall:.6f}")
-    except Exception as e:
-        print(f"❌ PR 指標計算失敗: {e}")
-        metrics['PR_Precision'] = float('nan')
-        metrics['PR_Recall'] = float('nan')
 
     return metrics
 
@@ -888,8 +763,6 @@ def save_results(metrics, runtime_stats=None):
     print(f"   KID         : {metrics.get('KID', float('nan')):.6f}")
     print(f"   CLIPScore   : {metrics.get('CLIPScore', float('nan')):.6f}")
     print(f"   LPIPS       : {metrics.get('LPIPS', float('nan')):.6f}")
-    print(f"   PR-Precision: {metrics.get('PR_Precision', float('nan')):.6f}")
-    print(f"   PR-Recall   : {metrics.get('PR_Recall', float('nan')):.6f}")
 
     print(f"\n📊 Patch-based Metrics:")
     print(f"   pFID        : {metrics.get('pFID', float('nan')):.4f}")
