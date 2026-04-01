@@ -1,9 +1,24 @@
 {
   "metrics": {
-    "FID": 108.97365620865355,
-    "KID": 0.003013400127855983,
-    "pFID": 52.95978757494578,
-    "pKID": 0.022554408868868895
+    "FID": 94.43374065952423,
+    "KID": 0.003879422008324131,
+    "pFID": 51.03512253517897,
+    "pKID": 0.02368028331831832,
+    "pLPIPS": 0.7775104966400618,
+    "CLIPScore": 0.28944249972701075,
+    "LPIPS": 0.6492770677308242,
+    "PR_Precision": 0.7533333333333333,
+    "PR_Recall": 0.74
+  },
+  "runtime": {
+    "avg_inference_time": 51.607743798096976,
+    "latency_p50": 51.63468027114868,
+    "latency_p95": 51.71747883558273,
+    "throughput_img_per_sec": 0.019376936994422042,
+    "peak_vram_gb": 9.508325099945068,
+    "generated": 600,
+    "failed": 0,
+    "total": 600
   },
   "settings": {
     "height": 2048,
@@ -12,7 +27,10 @@
     "patch_size": 512,
     "total_patches": 50000,
     "cleanfid_mode": "clean",
-    "seed": 42
-  },
-  "avg_inference_time": 51.41623310936822
+    "seed": 42,
+    "clip_model": "openai/clip-vit-large-patch14",
+    "lpips_net": "alex",
+    "pr_k": 3,
+    "pr_max_samples": 5000
+  }
 }

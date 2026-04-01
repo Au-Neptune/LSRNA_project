@@ -1,0 +1,10 @@
+Total images: 600
+Generated: 600
+Failed: 0
+Average Time: 93.3039 sec
+Min Time: 92.7224 sec
+Max Time: 93.5159 sec
+Latency P50: 93.3147 sec
+Latency P95: 93.4657 sec
+Throughput: 0.0107 img/sec
+Peak VRAM: 9.4349 GB

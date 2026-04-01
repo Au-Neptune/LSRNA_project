@@ -3,26 +3,30 @@ import json
 import random
 import time
 import shutil
+import math
+import lpips
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from tqdm import tqdm
-from torchvision import transforms
+from torchvision import transforms, models
+from transformers import CLIPModel, CLIPProcessor
+from scipy.spatial.distance import cdist
 from diffusers import DDIMScheduler, AutoencoderKL
 from pipeline_lsrna_demofusion_sdxl import DemoFusionLSRNASDXLPipeline
-from pipeline_demofusion_sdxl import DemoFusionSDXLPipeline
 from cleanfid import fid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 # ==================== 全域常數設定 ====================
 # 輸出設定
-OUTPUT_PATH = "eval_results/dat"
+OUTPUT_PATH = "eval_results/drct"
 
 # 模型設定
 VAE_MODEL = "madebyollin/sdxl-vae-fp16-fix"
 MODEL_CKPT = "stabilityai/stable-diffusion-xl-base-1.0"
-LSR_PATH = "lsr_training/save/dat-liif-latent-sdxl/iter_last.pth"
+LSR_PATH = "lsr_training/save/drct-liif-latent-sdxl/iter_last.pth"
 DEVICE = "cuda"
 DTYPE = torch.float16
 
@@ -32,7 +36,7 @@ WIDTH = 2048
 INPUT_SIZE = 1024
 
 # 資料集設定
-HR_PATH = "/home/m11215122/datasets/OpenImages/valid/HR"
+HR_PATH = "/home/m11215122/datasets/OpenImages/test"
 CAPTION_FILE = "/home/m11215122/datasets/OpenImages/captions.json"
 
 # 生成設定
@@ -60,6 +64,15 @@ TEXT_TO_IMAGE = True  # 設為 True 使用 text-to-image 模式
 CLEANFID_MODE = "clean"  # "clean" 或 "legacy"
 CLEANFID_NUM_WORKERS = 4
 CLEANFID_BATCH_SIZE = 32
+
+
+# 額外評估指標設定
+CLIP_MODEL_NAME = "openai/clip-vit-large-patch14"
+LPIPS_NET = "alex"
+LPIPS_IMAGE_SIZE = 256
+METRIC_BATCH_SIZE = 16
+PR_K = 3
+PR_MAX_SAMPLES = 5000
 
 
 # ==================== 輔助函式 ====================
@@ -210,10 +223,17 @@ def load_pipeline():
     vae = AutoencoderKL.from_pretrained(VAE_MODEL, torch_dtype=DTYPE)
     scheduler = DDIMScheduler.from_pretrained(MODEL_CKPT, subfolder="scheduler")
     
+    # pipe = DemoFusionLSRNASDXLPipeline.from_pretrained(
+    #     MODEL_CKPT, 
+    #     scheduler=scheduler, 
+    #     vae=vae, 
+    #     torch_dtype=DTYPE
+    # ).to(DEVICE)
+
     pipe = DemoFusionLSRNASDXLPipeline.from_pretrained(
-        MODEL_CKPT, 
-        scheduler=scheduler, 
-        vae=vae, 
+        MODEL_CKPT,
+        scheduler=scheduler,
+        vae=vae,
         torch_dtype=DTYPE
     ).to(DEVICE)
     
@@ -275,13 +295,13 @@ def generate_images(pipe, captions_data, gen_dir):
     批量生成圖像 (支援中斷續傳)
     """
     print("🚀 開始批量生成圖片...")
-    
+
     # 收集所有待處理的圖片
     hr_files = sorted([
-        f for f in os.listdir(HR_PATH) 
+        f for f in os.listdir(HR_PATH)
         if f.lower().endswith(('.png', '.jpg', '.jpeg'))
     ])
-    
+
     # 檢查已生成的圖片 (支援續傳)
     existing_files = set()
     if os.path.exists(gen_dir):
@@ -289,35 +309,46 @@ def generate_images(pipe, captions_data, gen_dir):
             f for f in os.listdir(gen_dir)
             if f.lower().endswith(('.png', '.jpg', '.jpeg'))
         ])
-    
+
     remaining_files = [f for f in hr_files if f not in existing_files]
-    
+
     print(f"📊 統計:")
     print(f"   總圖片數: {len(hr_files)}")
     print(f"   已完成: {len(existing_files)}")
     print(f"   剩餘: {len(remaining_files)}")
-    
+
     if not remaining_files:
         print("✅ 所有圖片都已生成!")
-        return 0.0
-    
+        return {
+            'avg_inference_time': 0.0,
+            'latency_p50': 0.0,
+            'latency_p95': 0.0,
+            'throughput_img_per_sec': 0.0,
+            'peak_vram_gb': 0.0,
+            'generated': len(existing_files),
+            'failed': 0,
+            'total': len(hr_files)
+        }
+
     inference_times = []
+    vram_peaks = []
     successful_count = 0
     failed_count = 0
-    
+    has_cuda = torch.cuda.is_available()
+
     try:
         for index, filename in enumerate(remaining_files):
             print(f"\n[{index+1}/{len(remaining_files)}] 處理: {filename}")
-            
+
             # 從 caption 檔案中讀取對應的 prompt
             if filename in captions_data:
                 current_prompt = captions_data[filename]
             else:
                 print(f"⚠️ 找不到 caption，使用預設 prompt")
                 current_prompt = "high resolution photography"
-            
+
             print(f"   Prompt: {current_prompt[:80]}...")
-            
+
             # 讀取並處理輸入圖像
             if not TEXT_TO_IMAGE:
                 print("   使用 Image-to-Image 模式")
@@ -331,50 +362,78 @@ def generate_images(pipe, captions_data, gen_dir):
             else:
                 print("   使用 Text-to-Image 模式")
                 image_lr = None
-            
+
             # 計時開始
-            torch.cuda.synchronize()
+            if has_cuda:
+                torch.cuda.synchronize()
+                torch.cuda.reset_peak_memory_stats()
             start_time = time.time()
-            
+
             # 生成圖像
             image = generate_single_image(pipe, current_prompt, image_lr)
-            
+
             if image is None:
                 print(f"❌ 生成失敗，跳過")
                 failed_count += 1
                 continue
-            
+
             # 計時結束
-            torch.cuda.synchronize()
+            if has_cuda:
+                torch.cuda.synchronize()
             end_time = time.time()
             elapsed = end_time - start_time
             inference_times.append(elapsed)
-            
+
+            # 記錄 VRAM 峰值
+            if has_cuda:
+                peak_bytes = torch.cuda.max_memory_allocated()
+                vram_peaks.append(peak_bytes / (1024 ** 3))
+
             # 存檔
             output_path = os.path.join(gen_dir, filename)
             image.save(output_path)
             successful_count += 1
-            
+
             print(f"✅ 完成 (耗時: {elapsed:.2f}s)")
-            
+
             # 每 10 張顯示平均時間
             if (index + 1) % 10 == 0:
                 avg_so_far = sum(inference_times) / len(inference_times)
                 print(f"\n📈 中間統計 ({index+1}/{len(remaining_files)}):")
                 print(f"   平均生成時間: {avg_so_far:.4f} 秒/張")
                 print(f"   成功: {successful_count}, 失敗: {failed_count}")
-    
+
     except KeyboardInterrupt:
         print("\n⚠️ 使用者中斷，儲存統計資料...")
-    
+
     # 計算並儲存統計
     if inference_times:
-        avg_time = sum(inference_times) / len(inference_times)
+        avg_time = float(sum(inference_times) / len(inference_times))
+        p50 = float(np.percentile(inference_times, 50))
+        p95 = float(np.percentile(inference_times, 95))
+        throughput = float(1.0 / avg_time) if avg_time > 0 else 0.0
+        peak_vram = float(max(vram_peaks)) if vram_peaks else 0.0
+
         print(f"\n⏱️ 最終統計:")
         print(f"   成功生成: {successful_count} 張")
         print(f"   失敗: {failed_count} 張")
         print(f"   平均生成時間: {avg_time:.4f} 秒/張")
-        
+        print(f"   Latency P50: {p50:.4f} 秒")
+        print(f"   Latency P95: {p95:.4f} 秒")
+        print(f"   Throughput: {throughput:.4f} 張/秒")
+        print(f"   Peak VRAM: {peak_vram:.4f} GB")
+
+        stats = {
+            'avg_inference_time': avg_time,
+            'latency_p50': p50,
+            'latency_p95': p95,
+            'throughput_img_per_sec': throughput,
+            'peak_vram_gb': peak_vram,
+            'generated': successful_count,
+            'failed': failed_count,
+            'total': len(hr_files)
+        }
+
         # 儲存時間統計
         with open(os.path.join(OUTPUT_PATH, 'time_result.txt'), 'w') as f:
             f.write(f"Total images: {len(hr_files)}\n")
@@ -383,11 +442,24 @@ def generate_images(pipe, captions_data, gen_dir):
             f.write(f"Average Time: {avg_time:.4f} sec\n")
             f.write(f"Min Time: {min(inference_times):.4f} sec\n")
             f.write(f"Max Time: {max(inference_times):.4f} sec\n")
-        
-        return avg_time
-    else:
-        print("⚠️ 沒有成功生成任何圖片")
-        return 0.0
+            f.write(f"Latency P50: {p50:.4f} sec\n")
+            f.write(f"Latency P95: {p95:.4f} sec\n")
+            f.write(f"Throughput: {throughput:.4f} img/sec\n")
+            f.write(f"Peak VRAM: {peak_vram:.4f} GB\n")
+
+        return stats
+
+    print("⚠️ 沒有成功生成任何圖片")
+    return {
+        'avg_inference_time': 0.0,
+        'latency_p50': 0.0,
+        'latency_p95': 0.0,
+        'throughput_img_per_sec': 0.0,
+        'peak_vram_gb': 0.0,
+        'generated': 0,
+        'failed': failed_count,
+        'total': len(hr_files)
+    }
 
 
 def count_images(directory):
@@ -395,13 +467,175 @@ def count_images(directory):
     if not os.path.exists(directory):
         return 0
     files = [
-        f for f in os.listdir(directory) 
+        f for f in os.listdir(directory)
         if f.lower().endswith(('.png', '.jpg', '.jpeg'))
     ]
     return len(files)
 
 
-def calculate_metrics_with_cleanfid(gen_dir, real_dir):
+def list_image_files(directory):
+    """列出資料夾內圖片檔名（排序後）"""
+    if not os.path.exists(directory):
+        return []
+    return sorted([
+        f for f in os.listdir(directory)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+    ])
+
+
+def _to_lpips_tensor(pil_img):
+    transform = transforms.Compose([
+        transforms.Resize((LPIPS_IMAGE_SIZE, LPIPS_IMAGE_SIZE)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+    ])
+    return transform(pil_img)
+
+
+def compute_lpips(gen_dir, real_dir):
+    """計算 paired LPIPS (依檔名配對)"""
+
+    gen_files = set(list_image_files(gen_dir))
+    real_files = set(list_image_files(real_dir))
+    common_files = sorted(list(gen_files & real_files))
+
+    if not common_files:
+        print("⚠️ 找不到可配對圖片，略過 LPIPS")
+        return float('nan')
+
+    metric_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    lpips_model = lpips.LPIPS(net=LPIPS_NET).to(metric_device).eval()
+
+    scores = []
+    with torch.no_grad():
+        for i in tqdm(range(0, len(common_files), METRIC_BATCH_SIZE), desc="LPIPS"):
+            batch_files = common_files[i:i + METRIC_BATCH_SIZE]
+            gen_batch = []
+            real_batch = []
+
+            for fname in batch_files:
+                gen_img = Image.open(os.path.join(gen_dir, fname)).convert('RGB')
+                real_img = Image.open(os.path.join(real_dir, fname)).convert('RGB')
+                gen_batch.append(_to_lpips_tensor(gen_img))
+                real_batch.append(_to_lpips_tensor(real_img))
+
+            gen_tensor = torch.stack(gen_batch, dim=0).to(metric_device)
+            real_tensor = torch.stack(real_batch, dim=0).to(metric_device)
+            batch_score = lpips_model(gen_tensor, real_tensor).view(-1)
+            scores.extend(batch_score.detach().cpu().tolist())
+
+    return float(np.mean(scores)) if scores else float('nan')
+
+
+def compute_clipscore(gen_dir, captions_data):
+    """計算 CLIPScore（圖文對齊）"""
+    image_files = list_image_files(gen_dir)
+    if not image_files:
+        return float('nan')
+
+    valid_items = [(f, captions_data.get(f, "high resolution photography")) for f in image_files]
+    metric_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    clip_model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(metric_device).eval()
+    clip_processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
+
+    sims = []
+    with torch.no_grad():
+        for i in tqdm(range(0, len(valid_items), METRIC_BATCH_SIZE), desc="CLIPScore"):
+            batch_items = valid_items[i:i + METRIC_BATCH_SIZE]
+            images = [Image.open(os.path.join(gen_dir, fname)).convert('RGB') for fname, _ in batch_items]
+            texts = [caption for _, caption in batch_items]
+
+            inputs = clip_processor(text=texts, images=images, return_tensors='pt', padding=True)
+            inputs = {k: v.to(metric_device) for k, v in inputs.items()}
+            outputs = clip_model(**inputs)
+
+            image_embeds = F.normalize(outputs.image_embeds, dim=-1)
+            text_embeds = F.normalize(outputs.text_embeds, dim=-1)
+            batch_sims = torch.sum(image_embeds * text_embeds, dim=-1)
+            sims.extend(batch_sims.detach().cpu().tolist())
+
+    return float(np.mean(sims)) if sims else float('nan')
+
+
+def _load_inception_feature_extractor(metric_device):
+    weights = models.Inception_V3_Weights.DEFAULT
+    model = models.inception_v3(weights=weights, transform_input=False)
+    model.fc = torch.nn.Identity()
+    model.eval().to(metric_device)
+
+    preprocess = transforms.Compose([
+        transforms.Resize((299, 299)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    return model, preprocess
+
+
+def _extract_features(image_dir, files, model, preprocess, metric_device):
+    feats = []
+    with torch.no_grad():
+        for i in tqdm(range(0, len(files), METRIC_BATCH_SIZE), desc=f"Features-{os.path.basename(image_dir)}"):
+            batch_files = files[i:i + METRIC_BATCH_SIZE]
+            batch = []
+            for fname in batch_files:
+                img = Image.open(os.path.join(image_dir, fname)).convert('RGB')
+                batch.append(preprocess(img))
+            x = torch.stack(batch, dim=0).to(metric_device)
+            f = model(x)
+            if isinstance(f, tuple):
+                f = f[0]
+            feats.append(f.detach().cpu().numpy())
+
+    if not feats:
+        return np.empty((0, 2048), dtype=np.float32)
+    return np.concatenate(feats, axis=0).astype(np.float32)
+
+
+def _kth_radius(features, k):
+    if features.shape[0] <= 1:
+        return np.zeros((features.shape[0],), dtype=np.float32)
+    d = cdist(features, features, metric='euclidean')
+    k_eff = min(k + 1, d.shape[1] - 1)
+    sorted_d = np.sort(d, axis=1)
+    return sorted_d[:, k_eff].astype(np.float32)
+
+
+def compute_pr_recall(gen_dir, real_dir, k=PR_K, max_samples=PR_MAX_SAMPLES):
+    """計算 Precision / Recall for Generative Models"""
+    gen_files = list_image_files(gen_dir)
+    real_files = list_image_files(real_dir)
+
+    if not gen_files or not real_files:
+        return float('nan'), float('nan')
+
+    if len(gen_files) > max_samples:
+        gen_files = random.sample(gen_files, max_samples)
+    if len(real_files) > max_samples:
+        real_files = random.sample(real_files, max_samples)
+
+    metric_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model, preprocess = _load_inception_feature_extractor(metric_device)
+
+    gen_feat = _extract_features(gen_dir, gen_files, model, preprocess, metric_device)
+    real_feat = _extract_features(real_dir, real_files, model, preprocess, metric_device)
+
+    if gen_feat.shape[0] == 0 or real_feat.shape[0] == 0:
+        return float('nan'), float('nan')
+
+    real_radius = _kth_radius(real_feat, k)
+    gen_radius = _kth_radius(gen_feat, k)
+    d_gr = cdist(gen_feat, real_feat, metric='euclidean')
+
+    precision_hits = (d_gr <= real_radius[None, :]).any(axis=1)
+    recall_hits = (d_gr <= gen_radius[:, None]).any(axis=0)
+
+    precision = float(np.mean(precision_hits))
+    recall = float(np.mean(recall_hits))
+    return precision, recall
+
+
+def calculate_metrics_with_cleanfid(gen_dir, real_dir, captions_data):
     """
     使用 clean-fid 計算所有指標
     
@@ -541,7 +775,7 @@ def calculate_metrics_with_cleanfid(gen_dir, real_dir):
     print("\n" + "-"*60)
     print("📐 計算 pKID (Patch-based KID)")
     print("-"*60)
-    
+
     try:
         # patches 已經在 pFID 階段切好了
         if os.path.exists(gen_patch_dir) and os.path.exists(real_patch_dir):
@@ -558,46 +792,115 @@ def calculate_metrics_with_cleanfid(gen_dir, real_dir):
             print(f"✅ pKID: {pkid_score:.6f}")
         else:
             raise ValueError("Patch 資料夾不存在")
-            
+
     except Exception as e:
         print(f"❌ pKID 計算失敗: {e}")
         metrics['pKID'] = float('nan')
+
+    # ========================================
+    # 5. 計算 pLPIPS (Patch-based LPIPS)
+    # ========================================
+    print("\n" + "-"*60)
+    print("📐 計算 pLPIPS (Patch-based LPIPS)")
+    print("-"*60)
+    try:
+        if os.path.exists(gen_patch_dir) and os.path.exists(real_patch_dir):
+            plpips_score = compute_lpips(gen_patch_dir, real_patch_dir)
+            metrics['pLPIPS'] = plpips_score
+            print(f"✅ pLPIPS: {plpips_score:.6f}")
+        else:
+            raise ValueError("Patch 資料夾不存在")
+    except Exception as e:
+        print(f"❌ pLPIPS 計算失敗: {e}")
+        metrics['pLPIPS'] = float('nan')
+
+    # 清理 patch 暫存檔（所有 patch 指標完成後一次清除）
+    print("\n🧹 清理暫存 patches...")
+    if os.path.exists(gen_patch_dir):
+        shutil.rmtree(gen_patch_dir)
+    if os.path.exists(real_patch_dir):
+        shutil.rmtree(real_patch_dir)
+    print("✅ 清理完成")
     
-    finally:
-        # 清理 patch 暫存檔以節省空間
-        print("\n🧹 清理暫存 patches...")
-        if os.path.exists(gen_patch_dir):
-            shutil.rmtree(gen_patch_dir)
-        if os.path.exists(real_patch_dir):
-            shutil.rmtree(real_patch_dir)
-        print("✅ 清理完成")
-    
+    # ========================================
+    # 6. 計算 CLIPScore
+    # ========================================
+    print("\n" + "-"*60)
+    print("📐 計算 CLIPScore")
+    print("-"*60)
+    try:
+        clip_score = compute_clipscore(gen_dir, captions_data)
+        metrics['CLIPScore'] = clip_score
+        print(f"✅ CLIPScore: {clip_score:.6f}")
+    except Exception as e:
+        print(f"❌ CLIPScore 計算失敗: {e}")
+        metrics['CLIPScore'] = float('nan')
+
+    # ========================================
+    # 7. 計算 LPIPS
+    # ========================================
+    print("\n" + "-"*60)
+    print("📐 計算 LPIPS")
+    print("-"*60)
+    try:
+        lpips_score = compute_lpips(gen_dir, real_dir)
+        metrics['LPIPS'] = lpips_score
+        print(f"✅ LPIPS: {lpips_score:.6f}")
+    except Exception as e:
+        print(f"❌ LPIPS 計算失敗: {e}")
+        metrics['LPIPS'] = float('nan')
+
+    # ========================================
+    # 8. 計算 PR-Recall/Precision
+    # ========================================
+    print("\n" + "-"*60)
+    print("📐 計算 PR-Precision / PR-Recall")
+    print("-"*60)
+    try:
+        pr_precision, pr_recall = compute_pr_recall(gen_dir, real_dir)
+        metrics['PR_Precision'] = pr_precision
+        metrics['PR_Recall'] = pr_recall
+        print(f"✅ PR-Precision: {pr_precision:.6f}")
+        print(f"✅ PR-Recall   : {pr_recall:.6f}")
+    except Exception as e:
+        print(f"❌ PR 指標計算失敗: {e}")
+        metrics['PR_Precision'] = float('nan')
+        metrics['PR_Recall'] = float('nan')
+
     return metrics
 
 
-def save_results(metrics, avg_time=None):
+def save_results(metrics, runtime_stats=None):
     """儲存並顯示評估結果"""
     print("\n" + "="*60)
     print("🎉 最終評估結果 (Final Results)")
     print("="*60)
-    
-    # 顯示結果
-    if avg_time is not None:
-        print(f"⏱️  Average Inference Time: {avg_time:.4f} sec/image")
-    
+
+    if runtime_stats is not None:
+        print(f"⏱️  Average Inference Time : {runtime_stats.get('avg_inference_time', 0.0):.4f} sec/image")
+        print(f"⏱️  Latency P50            : {runtime_stats.get('latency_p50', 0.0):.4f} sec")
+        print(f"⏱️  Latency P95            : {runtime_stats.get('latency_p95', 0.0):.4f} sec")
+        print(f"🚀 Throughput             : {runtime_stats.get('throughput_img_per_sec', 0.0):.4f} img/sec")
+        print(f"🧠 Peak VRAM              : {runtime_stats.get('peak_vram_gb', 0.0):.4f} GB")
+
     print(f"\n📊 Full Image Metrics:")
-    print(f"   FID     : {metrics.get('FID', float('nan')):.4f}")
-    print(f"   KID     : {metrics.get('KID', float('nan')):.6f}")
-    
+    print(f"   FID         : {metrics.get('FID', float('nan')):.4f}")
+    print(f"   KID         : {metrics.get('KID', float('nan')):.6f}")
+    print(f"   CLIPScore   : {metrics.get('CLIPScore', float('nan')):.6f}")
+    print(f"   LPIPS       : {metrics.get('LPIPS', float('nan')):.6f}")
+    print(f"   PR-Precision: {metrics.get('PR_Precision', float('nan')):.6f}")
+    print(f"   PR-Recall   : {metrics.get('PR_Recall', float('nan')):.6f}")
+
     print(f"\n📊 Patch-based Metrics:")
-    print(f"   pFID    : {metrics.get('pFID', float('nan')):.4f}")
-    print(f"   pKID    : {metrics.get('pKID', float('nan')):.6f}")
-    
+    print(f"   pFID        : {metrics.get('pFID', float('nan')):.4f}")
+    print(f"   pKID        : {metrics.get('pKID', float('nan')):.6f}")
+    print(f"   pLPIPS      : {metrics.get('pLPIPS', float('nan')):.6f}")
+
     print("="*60)
-    
-    # 儲存到 JSON
+
     results_dict = {
         'metrics': metrics,
+        'runtime': runtime_stats if runtime_stats is not None else {},
         'settings': {
             'height': HEIGHT,
             'width': WIDTH,
@@ -605,37 +908,47 @@ def save_results(metrics, avg_time=None):
             'patch_size': PATCH_SIZE,
             'total_patches': TOTAL_PATCHES,
             'cleanfid_mode': CLEANFID_MODE,
-            'seed': SEED
+            'seed': SEED,
+            'clip_model': CLIP_MODEL_NAME,
+            'lpips_net': LPIPS_NET,
+            'pr_k': PR_K,
+            'pr_max_samples': PR_MAX_SAMPLES
         }
     }
-    
-    if avg_time is not None:
-        results_dict['avg_inference_time'] = avg_time
-    
+
     results_file = os.path.join(OUTPUT_PATH, 'evaluation_results.json')
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(results_dict, f, indent=2, ensure_ascii=False)
-    
+
     print(f"\n💾 結果已儲存至: {results_file}")
-    
-    # 也儲存成易讀的文字檔
+
     txt_file = os.path.join(OUTPUT_PATH, 'evaluation_results.txt')
     with open(txt_file, 'w', encoding='utf-8') as f:
         f.write("="*60 + "\n")
         f.write("EVALUATION RESULTS\n")
         f.write("="*60 + "\n\n")
-        
-        if avg_time is not None:
-            f.write(f"Average Inference Time: {avg_time:.4f} sec/image\n\n")
-        
+
+        if runtime_stats is not None:
+            f.write("Runtime Metrics:\n")
+            f.write(f"  Average Inference Time : {runtime_stats.get('avg_inference_time', 0.0):.4f} sec/image\n")
+            f.write(f"  Latency P50            : {runtime_stats.get('latency_p50', 0.0):.4f} sec\n")
+            f.write(f"  Latency P95            : {runtime_stats.get('latency_p95', 0.0):.4f} sec\n")
+            f.write(f"  Throughput             : {runtime_stats.get('throughput_img_per_sec', 0.0):.4f} img/sec\n")
+            f.write(f"  Peak VRAM              : {runtime_stats.get('peak_vram_gb', 0.0):.4f} GB\n\n")
+
         f.write("Full Image Metrics:\n")
-        f.write(f"  FID  : {metrics.get('FID', float('nan')):.4f}\n")
-        f.write(f"  KID  : {metrics.get('KID', float('nan')):.6f}\n\n")
-        
+        f.write(f"  FID          : {metrics.get('FID', float('nan')):.4f}\n")
+        f.write(f"  KID          : {metrics.get('KID', float('nan')):.6f}\n")
+        f.write(f"  CLIPScore    : {metrics.get('CLIPScore', float('nan')):.6f}\n")
+        f.write(f"  LPIPS        : {metrics.get('LPIPS', float('nan')):.6f}\n")
+        f.write(f"  PR-Precision : {metrics.get('PR_Precision', float('nan')):.6f}\n")
+        f.write(f"  PR-Recall    : {metrics.get('PR_Recall', float('nan')):.6f}\n\n")
+
         f.write("Patch-based Metrics:\n")
-        f.write(f"  pFID : {metrics.get('pFID', float('nan')):.4f}\n")
-        f.write(f"  pKID : {metrics.get('pKID', float('nan')):.6f}\n")
-    
+        f.write(f"  pFID         : {metrics.get('pFID', float('nan')):.4f}\n")
+        f.write(f"  pKID         : {metrics.get('pKID', float('nan')):.6f}\n")
+        f.write(f"  pLPIPS       : {metrics.get('pLPIPS', float('nan')):.6f}\n")
+
     print(f"💾 結果已儲存至: {txt_file}")
 
 
@@ -655,7 +968,7 @@ def main():
     os.makedirs(OUTPUT_PATH, exist_ok=True)
     os.makedirs(gen_dir, exist_ok=True)
     
-    avg_time = None
+    runtime_stats = None
     
     # ==========================================
     # 第一階段：批量生成圖片
@@ -672,7 +985,7 @@ def main():
         captions_data = load_captions()
         
         # 生成圖像
-        avg_time = generate_images(pipe, captions_data, gen_dir)
+        runtime_stats = generate_images(pipe, captions_data, gen_dir)
         
         # 清理 GPU 記憶體
         del pipe
@@ -690,7 +1003,8 @@ def main():
     print("="*60)
     
     try:
-        metrics = calculate_metrics_with_cleanfid(gen_dir, HR_PATH)
+        captions_data = load_captions()
+        metrics = calculate_metrics_with_cleanfid(gen_dir, HR_PATH, captions_data)
     except Exception as e:
         print(f"\n❌ 評估失敗: {e}")
         import traceback
@@ -704,7 +1018,7 @@ def main():
     print("💾 階段 3: 儲存結果")
     print("="*60)
     
-    save_results(metrics, avg_time)
+    save_results(metrics, runtime_stats)
     
     print("\n✅ 所有任務完成!")
 
