@@ -11,6 +11,6 @@ Full Image Metrics:
   PR-Recall    : nan
 
 Patch-based Metrics:
-  pFID         : 51.9798
-  pKID         : 0.023536
-  pLPIPS       : 0.733630
+  pFID         : 51.7861
+  pKID         : 0.022910
+  pLPIPS       : 0.733413
