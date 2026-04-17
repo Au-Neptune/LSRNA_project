@@ -1,0 +1,23 @@
+============================================================
+EVALUATION RESULTS
+============================================================
+
+Runtime Metrics:
+  Average Inference Time : 232.0651 sec/image
+  Latency P50            : 231.8415 sec
+  Latency P95            : 233.2324 sec
+  Throughput             : 0.0043 img/sec
+  Peak VRAM              : 11.8038 GB
+
+Full Image Metrics:
+  FID          : 95.6106
+  KID          : 0.004282
+  CLIPScore    : 0.288701
+  LPIPS        : 0.707292
+  PR-Precision : nan
+  PR-Recall    : nan
+
+Patch-based Metrics:
+  pFID         : 32.5938
+  pKID         : 0.014465
+  pLPIPS       : 0.731264

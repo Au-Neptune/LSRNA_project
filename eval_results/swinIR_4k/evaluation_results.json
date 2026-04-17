@@ -1,0 +1,34 @@
+{
+  "metrics": {
+    "FID": 95.70903933465138,
+    "KID": 0.0043046951429465295,
+    "pFID": 32.00337127905294,
+    "pKID": 0.01410625984484485,
+    "pLPIPS": 0.7302133978370682,
+    "CLIPScore": 0.288987438728412,
+    "LPIPS": 0.7072175666689873
+  },
+  "runtime": {
+    "avg_inference_time": 233.0759935092926,
+    "latency_p50": 233.27097856998444,
+    "latency_p95": 233.5981162428856,
+    "throughput_img_per_sec": 0.004290446154250247,
+    "peak_vram_gb": 11.794223308563232,
+    "generated": 600,
+    "failed": 0,
+    "total": 600
+  },
+  "settings": {
+    "height": 4096,
+    "width": 4096,
+    "input_size": 1024,
+    "patch_size": 512,
+    "total_patches": 50000,
+    "cleanfid_mode": "clean",
+    "seed": 42,
+    "clip_model": "openai/clip-vit-large-patch14",
+    "lpips_net": "vgg",
+    "pr_k": 3,
+    "pr_max_samples": 5000
+  }
+}
