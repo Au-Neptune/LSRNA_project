@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import models
-from models import register
-from utils import make_coord
+from . import models
+from .models import register
+from ..utils import make_coord
 
 
 @register('liif')
@@ -29,7 +29,7 @@ class LIIF(nn.Module):
             feat = F.unfold(feat, 3, padding=1).view(
                 feat.shape[0], feat.shape[1] * 9, feat.shape[2], feat.shape[3])
         self.feat = feat
-        self.feat_coord = make_coord(feat.shape[-2:], flatten=False).cuda() \
+        self.feat_coord = make_coord(feat.shape[-2:], flatten=False, device=feat.device) \
             .permute(2, 0, 1) \
             .unsqueeze(0).expand(feat.shape[0], 2, *feat.shape[-2:])
         

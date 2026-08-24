@@ -16,7 +16,7 @@ def make_coord(shape, ranges=None, flatten=True, device='cpu'):
         r = (v1 - v0) / (2 * n)
         seq = v0 + r + (2 * r) * torch.arange(n, device=device).float()
         coord_seqs.append(seq)
-    ret = torch.stack(torch.meshgrid(*coord_seqs), dim=-1)
+    ret = torch.stack(torch.meshgrid(*coord_seqs, indexing='ij'), dim=-1)
     if flatten:
         ret = ret.view(-1, ret.shape[-1])
     return ret
@@ -43,7 +43,7 @@ class LIIF(nn.Module):
             feat = F.unfold(feat, 3, padding=1).view(
                 feat.shape[0], feat.shape[1] * 9, feat.shape[2], feat.shape[3])
         self.feat = feat
-        self.feat_coord = make_coord(feat.shape[-2:], flatten=False).cuda() \
+        self.feat_coord = make_coord(feat.shape[-2:], flatten=False, device=feat.device) \
             .permute(2, 0, 1) \
             .unsqueeze(0).expand(feat.shape[0], 2, *feat.shape[-2:])
         

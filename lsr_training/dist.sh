@@ -1,24 +1,7 @@
-#!/bin/bash
-# Usage | sudo bash dist.sh train.py --config configs/swinir-liif-latent-sdxl-v3.yaml --gpu 0
-SCRIPT=$1
-shift
-ARGS=("$@")
+#!/usr/bin/env bash
+set -euo pipefail
 
-source /home/m11215122/miniconda3/etc/profile.d/conda.sh
-conda activate lsrna
-
-for ((i=0; i<${#ARGS[@]}; i++)); do
-    if [[ ${ARGS[i]} == "--gpu" ]]; then
-        GPU=${ARGS[i+1]}
-        unset ARGS[i]
-        unset ARGS[i+1]
-        break
-    fi
-done
-
-ARGS=("${ARGS[@]}")
-NPROC_PER_NODE=$(echo $GPU | tr -cd ',' | wc -c)
-let NPROC_PER_NODE+=1
-FREE_PORT=$(python find_port.py)
-echo free port: $FREE_PORT
-CUDA_VISIBLE_DEVICES=$GPU python -m torch.distributed.launch --nproc_per_node=$NPROC_PER_NODE --master_port=$FREE_PORT $SCRIPT ${ARGS[@]}
+echo "lsr_training/dist.sh has been replaced by scripts/train_lsr.sh." >&2
+echo "Run from the repository root, for example:" >&2
+echo "  bash scripts/train_lsr.sh --gpus 0 --data-root data/OpenImages" >&2
+exit 2

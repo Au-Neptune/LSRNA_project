@@ -3,8 +3,8 @@ train_dataset:
   dataset:
     name: image-folder
     args:
-      hr_path: /home/m11215122/datasets/OpenImages/HR_sdxl_latent # shared
-      lr_path: /home/m11215122/datasets/OpenImages/LR_sdxl_latent
+      hr_path: data/OpenImages/HR_sdxl_latent
+      lr_path: data/OpenImages/LR_sdxl_latent
       scales: [2,3,4]
   wrapper:
     name: sr-explicit-paired
@@ -15,7 +15,7 @@ train_dataset:
   num_workers: 4 # total
   batch_size: 32 # total
 
-valid_path: /home/m11215122/datasets/OpenImages/valid/HR
+valid_path: valid/HR
 sd_ckpt: stabilityai/stable-diffusion-xl-base-1.0 # fixed
 
 model:

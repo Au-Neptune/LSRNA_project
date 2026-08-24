@@ -1,7 +1,7 @@
 import numpy as np
 from torch.utils.data import Dataset
-from datasets import register
-from utils import *
+from .datasets import register
+from ..utils import *
 
 
 @register('sr-explicit-paired')

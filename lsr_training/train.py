@@ -1,16 +1,16 @@
 import warnings
 warnings.filterwarnings("ignore")
-import os, sys
+import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-from functools import partial
 import argparse
-import yaml
 import builtins
+from pathlib import Path
+import yaml
 
-from utils import *
-import datasets
-import models
+from .utils import *
+from . import datasets
+from . import models
 from tqdm import tqdm
 
 import numpy as np
@@ -19,23 +19,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from diffusers import StableDiffusionXLPipeline
+from diffusers import AutoencoderKL
 
 
-def prepare_training(config, log):
+def prepare_training(config, log, resume_requested=False):
     resume_path = config['resume_path']
-    resume = os.path.exists(resume_path)
+    resume = resume_requested and os.path.exists(resume_path)
+
+    if resume_requested and not resume:
+        raise FileNotFoundError(f'Resume checkpoint not found: {resume_path}')
 
     if resume:
         sv_file = torch.load(resume_path, map_location=config['map_loc'])
         iter_start = sv_file['iter']+1
-        if iter_start <= config['iter_max']//100:
-            resume = False
-        else:
-            log('Model resumed from: {} (prev_iter: {})'.format(resume_path, sv_file['iter']))
-            model = models.make(sv_file['model'], load_sd=True).cuda()
-            optimizer, lr_scheduler = make_optim_sched(model.parameters(),
-                sv_file['optimizer'], sv_file['lr_scheduler'], load_sd=True)
+        log('Model resumed from: {} (prev_iter: {})'.format(resume_path, sv_file['iter']))
+        model = models.make(sv_file['model'], load_sd=True).cuda()
+        optimizer, lr_scheduler = make_optim_sched(model.parameters(),
+            sv_file['optimizer'], sv_file['lr_scheduler'], load_sd=True)
 
     if not resume:
         if config.get('init_path'):
@@ -52,9 +52,9 @@ def prepare_training(config, log):
 
     # load vae
     sd_ckpt = config['sd_ckpt']
-    pipeline = StableDiffusionXLPipeline.from_pretrained(sd_ckpt)
-    pipeline.enable_vae_tiling()
-    vae = pipeline.vae.cuda() # eval mode, float32, i/o range [-1,1]
+    vae = AutoencoderKL.from_pretrained(sd_ckpt, subfolder='vae')
+    vae.enable_tiling()
+    vae.requires_grad_(False).eval().cuda() # float32, i/o range [-1,1]
     return model, optimizer, lr_scheduler, iter_start, vae
 
 
@@ -94,7 +94,7 @@ def valid(model, config, vae):
             # crop to divisible size
             H,W = hr.shape[-2:]
             H,W = H//8*8, W//8*8
-            hr = hr[:,:H,:W]
+            hr = hr[:, :, :H, :W]
             hr = (hr - 0.5) * 2 # normalize to [-1,1]
 
             hr_latent = vae.encode(hr).latent_dist.mode() * vae.config.scaling_factor
@@ -124,16 +124,53 @@ def main():
     # get options
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
+    parser.add_argument(
+        '--data-root', type=str, default='data/OpenImages',
+        help='Root containing HR_sdxl_latent, LR_sdxl_latent and valid directories.',
+    )
+    parser.add_argument(
+        '--output-dir', type=str,
+        help='Training output directory. Defaults to outputs/lsr/<config-name>.',
+    )
+    parser.add_argument(
+        '--valid-subdir', type=str,
+        help='Validation image directory relative to --data-root. Uses the config value when omitted.',
+    )
+    parser.add_argument(
+        '--resume', action='store_true',
+        help='Resume from <output-dir>/iter_last.pth. Training starts fresh when omitted.',
+    )
+    parser.add_argument('--max-iterations', type=int, help='Override config iter_max (useful for smoke tests).')
+    parser.add_argument('--batch-size', type=int, help='Override the total config batch size.')
+    parser.add_argument('--num-workers', type=int, help='Override the total DataLoader worker count.')
+    parser.add_argument('--first-k', type=int, help='Use only the first K latent pairs.')
+    parser.add_argument('--seed', type=int, default=0, help='Training and sampler seed (default: 0).')
     parser.add_argument('--launcher', default='pytorch', help='job launcher')
-    parser.add_argument('--local-rank', type=int, default=0)
+    parser.add_argument('--local-rank', '--local_rank', type=int, default=0)
     args = parser.parse_args()
+
+    if args.max_iterations is not None and args.max_iterations < 1:
+        parser.error('--max-iterations must be at least 1')
+    if args.batch_size is not None and args.batch_size < 1:
+        parser.error('--batch-size must be at least 1')
+    if args.num_workers is not None and args.num_workers < 0:
+        parser.error('--num-workers must be non-negative')
+    if args.first_k is not None and args.first_k < 1:
+        parser.error('--first-k must be at least 1')
 
     # distributed setting
     init_dist('pytorch')
     rank, world_size = get_dist_info()
 
     # load logger
-    save_path = os.path.join('save', args.config.split('/')[-1][:-len('.yaml')])
+    save_path = args.output_dir or os.path.join('outputs', 'lsr', Path(args.config).stem)
+    save_path = os.fspath(Path(save_path).expanduser().resolve())
+    existing_checkpoint = Path(save_path) / 'iter_last.pth'
+    if existing_checkpoint.exists() and not args.resume:
+        raise FileExistsError(
+            f'Checkpoint already exists at {existing_checkpoint}. '
+            'Pass --resume or choose a new --output-dir.'
+        )
     logger = Logger()
     logger.set_save_path(save_path, remove=False)
     if rank > 0: 
@@ -142,7 +179,37 @@ def main():
     log = logger.log
 
     # load config
-    config = load_config(args.config)
+    config = load_config(args.config, save_path=save_path)
+    data_root = Path(args.data_root).expanduser().resolve()
+    dataset_args = config['train_dataset']['dataset']['args']
+    dataset_args['hr_path'] = os.fspath(data_root / 'HR_sdxl_latent')
+    dataset_args['lr_path'] = os.fspath(data_root / 'LR_sdxl_latent')
+    if args.first_k is not None:
+        dataset_args['first_k'] = args.first_k
+    if args.batch_size is not None:
+        config['train_dataset']['batch_size'] = args.batch_size
+    if args.num_workers is not None:
+        config['train_dataset']['num_workers'] = args.num_workers
+    if args.max_iterations is not None:
+        config['iter_max'] = args.max_iterations
+    config['seed'] = args.seed
+    if args.valid_subdir:
+        config['valid_path'] = os.fspath(data_root / args.valid_subdir)
+    else:
+        configured_valid = Path(config['valid_path'])
+        if configured_valid.is_absolute():
+            configured_valid = Path('valid') / configured_valid.name
+        config['valid_path'] = os.fspath(data_root / configured_valid)
+
+    required_paths = [
+        Path(dataset_args['hr_path']),
+        *(Path(dataset_args['lr_path']) / f'X{scale}' for scale in dataset_args.get('scales', [2, 3, 4])),
+        Path(config['valid_path']),
+    ]
+    missing_paths = [path for path in required_paths if not path.is_dir()]
+    if missing_paths:
+        missing = '\n'.join(f'  - {path}' for path in missing_paths)
+        raise FileNotFoundError(f'Missing dataset directories:\n{missing}')
     config['world_size'] = world_size
     if config['seed'] is not None:
         set_seed(config['seed'])
@@ -152,10 +219,13 @@ def main():
             yaml.dump(config, f, sort_keys=False)
     log('Config loaded: {}'.format(args.config))
     config['rank'] = rank
-    config['map_loc'] = f'cuda:{rank}'
+    local_rank = int(os.environ.get('LOCAL_RANK', args.local_rank))
+    config['map_loc'] = f'cuda:{local_rank}'
 
     # prepare training
-    model, optimizer, lr_scheduler, iter_start, vae = prepare_training(config, log)
+    model, optimizer, lr_scheduler, iter_start, vae = prepare_training(
+        config, log, resume_requested=args.resume
+    )
     model = nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
     train_loader, train_sampler = make_train_loader(config, log)
 
@@ -192,7 +262,7 @@ def main():
 
             if rank == 0:
                 train_loss.add(loss.item())
-                cond1 = (iter_cur % iter_print == 0)
+                cond1 = (iter_cur % iter_print == 0) or (iter_cur == iter_max)
                 cond2 = (iter_cur % iter_save == 0)
                 cond3 = (iter_cur % iter_val == 0)
 

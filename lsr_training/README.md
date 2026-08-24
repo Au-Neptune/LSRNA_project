@@ -1,9 +1,9 @@
-## LSR Training
-This directory includes the training code for LSR.
-To prepare training dataset, please refer to the appendix and the code located at ```datasets/scripts/make_trainset.py```.
-Training process can be executed using the script ```dist.sh```.
+## LSR training internals
 
-> **Note:**  
-> Please be aware that the training code is not fully refined and may encounter issues depending on your environment.
-> For instance, the training code currently is only compatible with PyTorch version 1.x.x.
-> Should you run into any problems during training, please open an issue or send an email.
+Use `scripts/train_lsr.sh` from the repository root. The handoff dataset already
+contains paired SDXL latents, so the downloader and preprocessing scripts under
+`datasets/scripts/` are retained only for provenance and are not part of the
+normal reproduction path.
+
+See the root `README.md` for installation, dataset extraction, validation,
+single/multi-GPU training, resume, and final pipeline commands.

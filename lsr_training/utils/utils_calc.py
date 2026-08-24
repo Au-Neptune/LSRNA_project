@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from utils.utils_image import tensor2numpy
+from .utils_image import tensor2numpy
 
 # https://github.com/cszn/KAIR
 def rgb2ycbcr(img, only_y=True):

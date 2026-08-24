@@ -8,6 +8,11 @@ generated_images/
 *.pth
 *.pt
 
+# Local datasets and generated artifacts
+data/
+outputs/
+artifacts/
+
 # 其他常見的 Python 忽略項目 (建議加入)
 # 虛擬環境
 venv/

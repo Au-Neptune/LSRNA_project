@@ -5,8 +5,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
-from datasets import register
-from utils.utils_io import *
+from .datasets import register
+from ..utils.utils_io import *
 
 
 @register('image-folder')

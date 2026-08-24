@@ -903,7 +903,7 @@ class DemoFusionLSRNASDXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLo
             self.text_encoder_2.cpu()
             self.unet.to(device)
 
-        if image_lr == None:
+        if image_lr is None:
             print("### Denoising 1X Reference ###")
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
@@ -947,6 +947,9 @@ class DemoFusionLSRNASDXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLo
             del latent_model_input, noise_pred, noise_pred_text, noise_pred_uncond
         else:
             print("### Encoding Real Image ###")
+            if low_vram:
+                self.vae.to(device)
+            image_lr = image_lr.to(device=device, dtype=self.vae.dtype)
             latents = self.vae.encode(image_lr)
             latents = latents.latent_dist.sample() * self.vae.config.scaling_factor
 
@@ -1007,7 +1010,8 @@ class DemoFusionLSRNASDXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLo
         diff = apply_canny_detection(image_ref, low_threshold=0, high_threshold=255).astype(np.float32)
         diff = torch.tensor(diff).cuda().unsqueeze(0).unsqueeze(0)
         diff = torch.nn.AdaptiveAvgPool2d((H,W))(diff)
-        std = ((diff - diff.min()) / (diff.max() - diff.min())) * (rna_max_std - rna_min_std) + rna_min_std
+        diff_range = (diff.max() - diff.min()).clamp_min(1e-6)
+        std = ((diff - diff.min()) / diff_range) * (rna_max_std - rna_min_std) + rna_min_std
         latents += torch.randn_like(latents) * std
 
         if view_latents:
