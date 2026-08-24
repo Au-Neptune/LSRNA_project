@@ -1,0 +1,5 @@
+yaml,encoder_name,params,params_M
+./lsr/dat-liif-latent-sdxl.yaml,dat,973624,0.973624
+./lsr/drct-liif-latent-sdxl.yaml,drct,1567432,1.567432
+./lsr/hat-liif-latent-sdxl.yaml,hat,1584232,1.584232
+./lsr/swinir-liif-latent-sdxl.yaml,swinir,938824,0.938824

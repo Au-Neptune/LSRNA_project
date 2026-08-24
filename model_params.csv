@@ -1,0 +1,5 @@
+yaml,model_name,encoder_name,imnet_name,total_params,total_params_M,encoder_params,encoder_params_M,imnet_params,imnet_params_M,other_params,other_params_M
+./lsr/dat-liif-latent-sdxl.yaml,liif,dat,mlp,1320764,1.320764,973624,0.973624,347140,0.34714,0,0.0
+./lsr/drct-liif-latent-sdxl.yaml,liif,drct,mlp,1914572,1.914572,1567432,1.567432,347140,0.34714,0,0.0
+./lsr/hat-liif-latent-sdxl.yaml,liif,hat,mlp,1931372,1.931372,1584232,1.584232,347140,0.34714,0,0.0
+./lsr/swinir-liif-latent-sdxl.yaml,liif,swinir,mlp,1285964,1.285964,938824,0.938824,347140,0.34714,0,0.0

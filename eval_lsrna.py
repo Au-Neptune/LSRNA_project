@@ -14,6 +14,7 @@ from torchvision import transforms, models
 from transformers import CLIPModel, CLIPProcessor
 from scipy.spatial.distance import cdist
 from diffusers import DDIMScheduler, AutoencoderKL
+from pipeline_demofusion_sdxl import DemoFusionSDXLPipeline
 from pipeline_lsrna_demofusion_sdxl import DemoFusionLSRNASDXLPipeline
 from cleanfid import fid
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -21,18 +22,18 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ==================== 全域常數設定 ====================
 # 輸出設定
-OUTPUT_PATH = "eval_results/swinIR"
+OUTPUT_PATH = "eval_results/demofusion_4k"
 
 # 模型設定
 VAE_MODEL = "madebyollin/sdxl-vae-fp16-fix"
 MODEL_CKPT = "stabilityai/stable-diffusion-xl-base-1.0"
-LSR_PATH = "lsr_training/save/swinir-liif-latent-sdxl/iter_last.pth"
+# LSR_PATH = "lsr_training/save/drct-liif-latent-sdxl/iter_last.pth"
 DEVICE = "cuda"
 DTYPE = torch.float16
 
 # 圖像設定
-HEIGHT = 2048
-WIDTH = 2048
+HEIGHT = 4096
+WIDTH = 4096
 INPUT_SIZE = 1024
 
 # 資料集設定
@@ -54,11 +55,10 @@ SIGMA = 0.8
 
 # Patch 設定
 PATCH_SIZE = 512
-TOTAL_PATCHES = 25000
+TOTAL_PATCHES = 50000
 
 # 控制開關
-SKIP_GEN = True  # 設為 True 跳過生成步驟
-TEXT_TO_IMAGE = True  # 設為 True 使用 text-to-image 模式
+SKIP_GEN = False  # 設為 True 跳過生成步驟
 
 # clean-fid 設定
 CLEANFID_MODE = "clean"  # "clean" 或 "legacy"
@@ -194,19 +194,19 @@ def load_pipeline():
     vae = AutoencoderKL.from_pretrained(VAE_MODEL, torch_dtype=DTYPE)
     scheduler = DDIMScheduler.from_pretrained(MODEL_CKPT, subfolder="scheduler")
     
-    # pipe = DemoFusionLSRNASDXLPipeline.from_pretrained(
-    #     MODEL_CKPT, 
-    #     scheduler=scheduler, 
-    #     vae=vae, 
-    #     torch_dtype=DTYPE
-    # ).to(DEVICE)
-
-    pipe = DemoFusionLSRNASDXLPipeline.from_pretrained(
-        MODEL_CKPT,
-        scheduler=scheduler,
-        vae=vae,
+    pipe = DemoFusionSDXLPipeline.from_pretrained(
+        MODEL_CKPT, 
+        scheduler=scheduler, 
+        vae=vae, 
         torch_dtype=DTYPE
     ).to(DEVICE)
+
+    # pipe = DemoFusionLSRNASDXLPipeline.from_pretrained(
+    #     MODEL_CKPT,
+    #     scheduler=scheduler,
+    #     vae=vae,
+    #     torch_dtype=DTYPE
+    # ).to(DEVICE)
     
     pipe.vae.enable_tiling()
     
@@ -248,7 +248,7 @@ def generate_single_image(pipe, prompt, image_lr):
                 # cosine_scale_3=COSINE_SCALE_3,
                 # sigma=SIGMA,
                 # image_lr=image_lr
-            )[1]  # 取第二張圖
+            )[-1]  # 取最後一張圖
         return image
         
     except torch.cuda.OutOfMemoryError:

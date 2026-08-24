@@ -620,7 +620,7 @@ class DemoFusionLSRNASDXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLo
         negative_crops_coords_top_left: Tuple[int, int] = (0, 0),
         negative_target_size: Optional[Tuple[int, int]] = None,
         ################### Added parameters (including DemoFusion) ####################
-        view_batch_size: int = 8,
+        view_batch_size: int = 16,
         stride_ratio: float = 0.5,
         lsr_path: str = 'lsr/checkpoints/swinir-liif-latent-sdxl.pth',
         cosine_scale_1: float = 3.,
@@ -767,6 +767,7 @@ class DemoFusionLSRNASDXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLo
         print('LSR model loaded from ...', lsr_path)
         sv_file = torch.load(lsr_path)
         lsr_model = lsr.models.make(sv_file['model'], load_sd=True).cuda()
+        lsr_model.eval()
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
@@ -978,17 +979,23 @@ class DemoFusionLSRNASDXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLo
             self.unet.cpu()
             lsr_model.to(device)
 
-        H = current_height // self.vae_scale_factor
-        W = current_width // self.vae_scale_factor
-        coord = make_coord((H,W), flatten=False, device=latents.device).unsqueeze(0)
-        cell = torch.ones_like(coord)
-        cell[:,:,:,0] *= 2/H
-        cell[:,:,:,1] *= 2/W
+        try:
+            H = current_height // self.vae_scale_factor
+            W = current_width // self.vae_scale_factor
+            coord = make_coord((H,W), flatten=False, device=latents.device).unsqueeze(0)
+            cell = torch.ones_like(coord)
+            cell[:,:,:,0] *= 2/H
+            cell[:,:,:,1] *= 2/W
 
-        dtype = latents.dtype
-        latents = latents.to(torch.float32)
-        latents = lsr_model(latents, coord, cell)
-        latents = latents.to(dtype) # upsampled latent, float16
+            dtype = latents.dtype
+            latents = latents.to(torch.float32)
+            latents = lsr_model(latents, coord, cell)
+            latents = latents.to(dtype) # upsampled latent, float16
+        
+        finally:
+            del lsr_model
+            del sv_file
+            torch.cuda.empty_cache()
 
         if view_latents:
             print(f"### Visualizing {current_scale_num}X Upsampled Latent ###")
